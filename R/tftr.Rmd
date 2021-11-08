@@ -1,0 +1,223 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+## 载入包，连接数据库
+```{r}
+# Libraries
+library(mongolite)
+library(ggplot2)
+library(tidyr)
+library (plyr)
+# Graphics
+library(hrbrthemes)
+library(GGally)
+library(viridis)
+library(ggrepel)
+
+# 读取数据库地址
+url<-read.table(".dburl")[1,1]
+# url <- "mongodb://user:pass@site:port"
+db<-"tft"
+
+# 连接数据库
+s_con <- mongo(collection='summoner',
+               db=db,
+               url=url)
+```
+
+## 分析summoner
+```{r}
+summoners <- s_con$find()
+level<-summoners$summonerlevel
+summary(level)
+hist(level,main=NULL,xlab="Histogram of Summoner Level")
+```
+
+```{r}
+dfx = data.frame(level=summoners$summonerlevel, tire=summoners$summonertire, rank=summoners$summonerrank)
+dfx<-unite(dfx,"tier_rank",tire,rank,sep = "-",remove = FALSE)
+
+tiers<-rev(c("CHALLENGER","GRANDMASTER","MASTER","DIAMOND","PLATINUM","GOLD","SILVER","BRONZE","IRON"))
+ranks<-rev(c("I","II","III","IV","V"))
+tire_order<-lapply(tiers,function(x) paste(x,combn(ranks,1),sep="-")) %>% unlist
+
+dfx$tier_rank<-ordered(dfx$tier_rank,tire_order)
+
+ggplot(dfx, aes(x=level, y=tier_rank))+ geom_boxplot()+theme_bw()+xlab("Summoner Level")+ylab("Summoner Tier")
+
+s_con$disconnect()
+```
+## 分析 Matches
+```{r}
+m_con <- mongo(collection='matches',
+               db=db,
+               url=url)
+matches<-m_con$find('{"match.info.tftsetnumber":6}',fields = '{"match.info.participants":1}')
+trait<- matches$match$info$participants
+```
+
+```{r}
+traits<-list()
+for (i in 1:(length(trait)-1)) {
+  tmp<-list("match"=list("placements"=trait[[i]][[5]],"traits"=trait[[i]][[10]],"units"=trait[[i]][[11]]))
+  traits<-append(traits,tmp)
+}
+```
+
+```{r}
+characterList<-list()
+for (tr in traits){
+  for (i in 1:8){
+    char<-unique(tr[["units"]][[i]][["characterid"]])
+    for (c in char){
+      characterList[[c]]<-c(characterList[[c]],tr[["placements"]][[i]])
+    }
+  }
+}
+charact<-lapply(characterList, table)
+charact<-lapply(charact, prop.table)
+
+datafx<-ldply(charact,data.frame)
+datafx<-spread(datafx,Var1,Freq)
+names(datafx)[1]<-"Champion"
+datafx$Champion<-sub("TFT6?_","",datafx$Champion)
+
+datafx %>%
+  ggparcoord(
+    columns = 2:9, groupColumn = 1,
+    scale = "uniminmax",
+    title = "Parallel Coordinate Plot for the Champion Placements",
+    alphaLines = 0.7) +
+  scale_color_viridis(discrete=TRUE,option = "A")+
+  theme(
+    plot.title = element_text(size=10),
+    legend.position="bottom",
+    legend.justification="center"
+  )
+```
+## 统计英雄胜率
+
+```{r}
+first<-function(index,width,list){
+  return(sum(table(list[[index]])[width],na.rm=T)/sum(table(list[[index]]),na.rm=T))
+}
+
+character_discribe<-data.frame(Champion=character(0),Top4=double(0),Winner=double(0),AvgPlacement=double(0),PickTimes=integer(0))
+
+for(i in 1:length(characterList)){
+  character_discribe[i,]<-list(names(characterList)[i],first(i,1:4,characterList),first(i,1,characterList),mean(characterList[[i]],na.rm = T),length(characterList[[i]]));
+}
+character_discribe$Champion<-sub("TFT6?_","",character_discribe$Champion)
+character_discribe[,2:5]<-round(character_discribe[,2:5],digits = 3)
+write.csv(character_discribe,"character_discribe.csv", row.names = TRUE)
+```
+
+## 统计羁绊
+
+```{r}
+traitsList<-list()
+traitsWinTimes<-list()
+
+for (tr in traits){
+  for (i in 1:8){
+    char<-tr[["traits"]][[i]][["name"]]
+    tnames<-""
+    j<-0
+    for (c in char){
+      j<-j+1
+      #print(tr[["traits"]][[i]][["style"]][[j]])
+      #print(tnames)
+      if(tr[["traits"]][[i]][["style"]][[j]]>1){
+        tnames<-paste(tnames,c,sep = "")
+      }
+      traitsList[[c]]<-c(traitsList[[c]],tr[["placements"]][[i]])
+    }
+    if(tnames!=""){
+      traitsWinTimes[[tnames]]<-c(traitsWinTimes[[tnames]],tr[["placements"]][[i]])
+    }
+  }
+}
+```
+
+```{r}
+traits_list<-lapply(traitsList, table)
+traits_list<-lapply(traits_list, prop.table)
+
+datafx<-ldply(traits_list,data.frame)
+datafx<-spread(datafx,Var1,Freq)
+names(datafx)[1]<-"Traits"
+datafx$Traits<-sub("Set6?_","",datafx$Traits)
+
+# Data set is provided by R natively
+datafx %>%
+  ggparcoord(
+    columns = 2:9, groupColumn = 1,
+    scale = "uniminmax",
+    title = "Parallel Coordinate Plot for the Traits Placements",
+    alphaLines = 0.7) +
+  scale_color_viridis(discrete=TRUE,option = "A")+
+  theme(
+    plot.title = element_text(size=10),
+    legend.position="bottom",
+    legend.justification="center"
+  )+
+  xlab("")
+
+traits_discribe<-data.frame(Traits=character(0),Top4=double(0),Winner=double(0),AvgPlacement=double(0),PickTimes=integer(0))
+
+for(i in 1:length(traitsList)){
+  traits_discribe[i,]<-list(names(traitsList)[i],first(i,1:4,traitsList),first(i,1,traitsList),mean(traitsList[[i]],na.rm = T),length(traitsList[[i]]));
+}
+traits_discribe$Traits<-sub("Set6?_","",traits_discribe$Traits)
+traits_discribe[,2:5]<-round(traits_discribe[,2:5],digits = 3)
+write.csv(traits_discribe,"traits_discribe.csv", row.names = TRUE)
+```
+
+```{r}
+# 去除出现场次小于3的羁绊组合
+ti<-1
+while(ti<=length(traitsWinTimes)){
+  if(length(traitsWinTimes[[ti]])<3){
+    traitsWinTimes[[ti]]<-NULL
+  }else{
+    ti<-ti+1
+  }
+}
+
+
+traits_win_times<-lapply(traitsWinTimes, table)
+traits_win_times<-lapply(traits_win_times, prop.table)
+
+datafx<-ldply(traits_win_times,data.frame)
+datafx<-spread(datafx,Var1,Freq)
+names(datafx)[1]<-"TraitsComb"
+datafx$TraitsComb<-gsub("Set6?_",",",datafx$TraitsComb)
+datafx$TraitsComb<-sub(",","",datafx$TraitsComb)
+
+datafx %>%
+  ggparcoord(
+    columns = 2:9, groupColumn = 1,
+    scale = "uniminmax",
+    title = "Parallel Coordinate Plot for the Traits Placements",
+    alphaLines = 0.7) +
+  scale_color_viridis(discrete=TRUE,option = "A")+
+  theme(
+    plot.title = element_text(size=10),
+    legend.position="bottom",
+    legend.justification="center"
+  )+
+  xlab("")
+
+traits_comp_discribe<-data.frame(TraitsComb=character(0),Top4=double(0),Winner=double(0),AvgPlacement=double(0),PickTimes=integer(0))
+
+for(i in 1:length(traitsWinTimes)){
+  traits_comp_discribe[i,]<-list(names(traitsWinTimes)[i],first(i,1:4,traitsWinTimes),first(i,1,traitsWinTimes),mean(traitsWinTimes[[i]],na.rm = T),length(traitsWinTimes[[i]]));
+}
+
+traits_comp_discribe$TraitsComb<-gsub("Set6?_",",",traits_comp_discribe$TraitsComb)
+traits_comp_discribe$TraitsComb<-sub(",","",traits_comp_discribe$TraitsComb)
+traits_comp_discribe[,2:5]<-round(traits_comp_discribe[,2:5],digits = 3)
+
+write.csv(traits_comp_discribe,"traits_comp_discribe.csv", row.names = TRUE)
+```
