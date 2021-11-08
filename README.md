@@ -12,7 +12,7 @@ Then run `go build -o main ./cmd/collect/main.go`
 
 And `./main`
 
-Open`./R/tftr.Rmd` and find more!
+Open`./R/tftr.Rmd` or [R Notebook](https://magicwenli.github.io/tft-collection-and-analysis/R/tftr.nb.html) find more!
 
 -----
 
